@@ -7,13 +7,12 @@ app:
   port: 8000
 
 database:
-  url: "postgresql+asyncpg://postgres:postgres@localhost:5432/dev_docs_db"
+  url: "postgresql+asyncpg://postgres:postgres@localhost:5431/dev_docs_db"
 
 gemini:
-  model: "gemini-2.5-flash"
-  embedding_model: "text-embedding-004"
+  model: "gemini-3.6-flash"
+  embedding_model: "gemini-embedding-001"
   embedding_dimension: 768
-  temperature: 0.2
   max_output_tokens: 2048
 
 rag:

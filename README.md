@@ -74,14 +74,28 @@ A high-performance Retrieval-Augmented Generation (RAG) backend service engineer
 
     API Key: A valid Google Gemini API Key
 
+## Usage and management commands
+
+    1-) Start the database
+
+        docker compose up -d
+
+    2-) Verify pgvector is installed and active
+
+        docker exec -it dev_copilot_postgres psql -U postgres -d dev_docs_db -c "\dx"
+
+    3-) Check if services are running:
+
+        docker exec -it dev_copilot_postgres psql -U postgres -d dev_docs_db -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
 ## Getting Started
 
 ### 1. Clone & Setup Virtual Environment
 
-        git clone https://github.com/your-org/internal-dev-copilot.git
-        cd internal-dev-copilot
+        git clone https://github.com/ZenseiTech/Financial_Pdf_Copilot.git
+        cd financial-dev-copilot
 
-        python3 -m venv venv
+        python3 -m venv .venv
         source venv/bin/activate
         pip install -r requirements.txt
 
@@ -93,24 +107,27 @@ YAML
 -> config.yaml
 
     database:
-    url: "postgresql+asyncpg://postgres:postgres@localhost:5432/dev_docs_db"
+    url: "postgresql+asyncpg://postgres:postgres@localhost:5431/dev_docs_db"
 
 Set your Gemini API Key in your shell environment:
 
-Bash
-export GEMINI_API_KEY="your-gemini-api-key"
+    Bash
+    export GEMINI_API_KEY="your-gemini-api-key"
+
 Ensure pgvector is available on your PostgreSQL instance:
 
-SQL
-CREATE EXTENSION IF NOT EXISTS vector;
+    SQL
+    CREATE EXTENSION IF NOT EXISTS vector;
+
+    docker exec -it dev_copilot_postgres psql -U postgres -d dev_docs_db -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 ### How to Run
 
-Run as a module from project root:
+Ingest a single PDF file:
 
     python -m app.ingestion.main --file data/q3_financials.pdf
 
-Batch process a directory:
+Batch ingest an entire directory of PDFs:
 
     python -m app.ingestion.main --dir data/annual_reports/
 
@@ -124,4 +141,53 @@ Set your Google Gemini API key:
 
 Run the test script:
 
+    python test_pipeline.py
+
+### Running the API Web Server
+
+Start the web application using Uvicorn:
+
+    uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+    * Health Endpoint: GET http://localhost:8000/health
+
+    * Swagger UI: http://localhost:8000/docs
+
+### API Endpoints
+
+Stream Chat (POST /api/v1/chat/stream)
+Streams Gemini-generated answers over Server-Sent Events (SSE).
+
+Request Body:
+
+    JSON
+    {
+    "query": "What was the operating profit and gross margin in Q3?",
+    "filename_filter": "q3_financials.pdf",
+    "history": [
+        {
+        "role": "user",
+        "text": "Hello"
+        },
+        {
+        "role": "model",
+        "text": "Hello! How can I assist you with financial reports today?"
+        }
+    ]
+    }
+
+cURL Example:
+
+    Bash
+    curl -N -X POST "http://localhost:8000/api/v1/chat/stream" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "query": "What was the operating profit and gross margin in Q3?"
+    }'s
+
+### Testing & Verification
+
+Run the end-to-end verification script to validate database connectivity, embedding generation, vector indexing, search retrieval, and streaming LLM loops:
+
+    Bash
     python test_pipeline.py

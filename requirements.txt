@@ -1,3 +1,11 @@
 pgvector 
 asyncpg 
 sqlalchemy
+pydantic
+redis
+pyyaml
+pydantic-settings
+pdfplumber 
+pdfminer.six 
+pypdf
+google-genai>=0.1.0

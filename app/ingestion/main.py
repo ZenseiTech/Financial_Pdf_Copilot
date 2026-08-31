@@ -85,7 +85,7 @@ async def process_directory(directory_path: Path):
         return
 
     logger.info("Found %d PDFs in %s for batch ingestion", len(pdf_files), dir_path)
-    
+
     for pdf_file in pdf_files:
         try:
             await process_financial_pdf(pdf_file)
@@ -137,4 +137,12 @@ def main():
 
 
 if __name__ == "__main__":
+    # from google import genai
+
+    # client = genai.Client()
+
+    # print("Available Embedding Models:")
+    # for m in client.models.list():
+    #     if "embed" in m.name:
+    #         print(f"- Name: {m.name}")
     main()
