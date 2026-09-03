@@ -9,3 +9,8 @@ pdfplumber
 pdfminer.six 
 pypdf
 google-genai>=0.1.0
+langchain-text-splitters 
+tabulate 
+pandas
+sentence-transformers 
+torch

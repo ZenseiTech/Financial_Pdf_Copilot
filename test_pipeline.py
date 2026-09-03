@@ -1,118 +1,167 @@
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 
-# Ensure root directory is in Python path
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+from redis.asyncio import Redis
+from sqlalchemy import text
 
-from app.agent.loop import stream_agent_response
-from app.core.config import config, init_logging
-from app.db.session import AsyncSessionLocal, async_engine
-from app.rag.embeddings import get_gemini_embedding
-from app.rag.indexer import index_document_chunks, init_db_schema
-from app.rag.retriever import search_similar_chunks
+# Ensure project root is in Python path
+sys.path.insert(0, str(Path(__file__).parent))
 
+from app.core.config import config
+from app.db.session import AsyncSessionLocal
+from app.ingestion.chunker import process_pdf_to_chunks
+from app.rag.embeddings import (
+    get_gemini_embedding,
+    get_batch_embeddings,
+    get_query_embedding,
+)
+from app.rag.indexer import insert_chunks_to_pgvector
+from app.rag.retriever import retrieve_similar_chunks
+from app.agent.loop import generate_streaming_response
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 logger = logging.getLogger("test_pipeline")
 
 
 async def test_database_connection():
-    """1. Test database connection and schema initialization."""
-    logger.info("=== STEP 1: Testing Database Connection ===")
-    async with AsyncSessionLocal() as db:
-        await init_db_schema(db)
-    logger.info("✅ Database connection and schema check passed.")
+    logger.info("--- Testing Database Connection & pgvector Extension ---")
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(text("SELECT version();"))
+        db_version = result.scalar()
+        logger.info(f"Connected to PostgreSQL: {db_version}")
 
-
-async def test_embedding_generation():
-    """2. Test vector embedding generation via Google GenAI SDK."""
-    logger.info("=== STEP 2: Testing Gemini Embedding Generation ===")
-    sample_text = "Q3 net income increased by 14% year-over-year to $4.2 billion."
-    embedding = await get_gemini_embedding(sample_text)
-    
-    assert len(embedding) == config.gemini.embedding_dimension, (
-        f"Expected dimension {config.gemini.embedding_dimension}, got {len(embedding)}"
-    )
-    logger.info("✅ Gemini embedding generated successfully (Dimension: %d).", len(embedding))
-    return embedding
-
-
-async def test_pgvector_indexing(embedding: list):
-    """3. Test indexing sample document chunk into pgvector."""
-    logger.info("=== STEP 3: Testing Chunk Indexing in pgvector ===")
-    test_chunk = {
-        "content": "In Q3 2025, operating profit reached $1.8B with a gross margin of 42%.",
-        "chunk_type": "text",
-        "chunk_index": 0,
-        "embedding": embedding,
-        "metadata": {
-            "filename": "test_q3_report.pdf",
-            "page_number": 1,
-            "chunk_id": "test_q3_report_0",
-        },
-    }
-
-    async with AsyncSessionLocal() as db:
-        indexed_count = await index_document_chunks(db=db, chunks=[test_chunk])
-        assert indexed_count == 1, "Failed to index test chunk."
-    logger.info("✅ Sample chunk indexed successfully into pgvector.")
-
-
-async def test_retrieval():
-    """4. Test cosine similarity search against pgvector."""
-    logger.info("=== STEP 4: Testing Vector Similarity Search ===")
-    query = "What was the operating profit and gross margin in Q3?"
-    
-    async with AsyncSessionLocal() as db:
-        results = await search_similar_chunks(
-            db=db,
-            query=query,
-            filename_filter="test_q3_report.pdf",
-            top_k=2,
-            similarity_threshold=0.3,
+        ext_result = await session.execute(
+            text("SELECT extname FROM pg_extension WHERE extname = 'vector';")
         )
-        
-        assert len(results) > 0, "Vector search returned no results."
-        logger.info("✅ Retrieved %d matching chunk(s). Best match score: %.4f", 
-                    len(results), results[0]["similarity_score"])
-        logger.info("   Retrieved Content: %s", results[0]["content"])
+        ext = ext_result.scalar()
+        assert ext == "vector", "pgvector extension is NOT installed in database!"
+        logger.info("✓ PostgreSQL & pgvector verified.")
 
 
-async def test_agent_chat_stream():
-    """5. Test Gemini agent streaming response loop with RAG context."""
-    logger.info("=== STEP 5: Testing Agent Streaming Response ===")
-    user_query = "Summarize the Q3 2025 financial metrics from the report."
-    
-    print("\n--- Agent Streamed Response Start ---")
-    async with AsyncSessionLocal() as db:
-        async for chunk in stream_agent_response(
-            db=db,
-            user_query=user_query,
-            filename_filter="test_q3_report.pdf",
-        ):
-            print(chunk, end="", flush=True)
-    print("\n--- Agent Streamed Response End ---\n")
-    logger.info("✅ Agent response stream completed successfully.")
+async def test_redis_connection():
+    logger.info("--- Testing Redis Connection ---")
+    redis_client = Redis(
+        host=config.redis.host,
+        port=config.redis.port,
+        password=config.redis.password,
+        decode_responses=True,
+    )
+    ping = await redis_client.ping()
+    assert ping is True, "Failed to ping Redis server!"
+
+    # Test SET and GET
+    test_key = "pipeline_test_key"
+    await redis_client.setex(test_key, 60, "redis_ok")
+    val = await redis_client.get(test_key)
+    assert val == "redis_ok", "Redis key set/get failed!"
+    await redis_client.delete(test_key)
+    await redis_client.aclose()
+    logger.info("✓ Redis connection & cache ops verified.")
+
+
+async def test_embeddings():
+    logger.info("--- Testing Gemini Embeddings API ---")
+    model_name = config.gemini.embedding_model
+    logger.info(
+        f"Using embedding model: {model_name} (dim: {config.gemini.embedding_dimension})"
+    )
+
+    test_str = "Q3 financial results indicate revenue growth of 15% year-over-year."
+    vec = await get_gemini_embedding(test_str, task_type="RETRIEVAL_DOCUMENT")
+
+    assert (
+        len(vec) == config.gemini.embedding_dimension
+    ), f"Expected vector dim {config.gemini.embedding_dimension}, got {len(vec)}"
+    logger.info(f"✓ Single embedding generated successfully (dim: {len(vec)}).")
+
+    batch_vecs = await get_batch_embeddings(
+        [test_str, "Operating expenses remained flat."], batch_size=2
+    )
+    assert len(batch_vecs) == 2, "Batch embedding count mismatch!"
+    logger.info("✓ Batch embeddings generated successfully.")
+
+
+async def test_ingestion_and_retrieval():
+    logger.info("--- Testing PDF Chunker & Vector Search ---")
+    sample_pdf = Path("data/sample_report.pdf")
+
+    if not sample_pdf.exists():
+        logger.warning(
+            f"Sample PDF not found at {sample_pdf}. Creating dummy text chunk for index/retrieval test..."
+        )
+        chunks = [
+            {
+                "content": "| Item | Q3 Revenue |\n|---|---|\n| Net Sales | $1,250,000 |",
+                "metadata": {
+                    "file_name": "test_dummy.pdf",
+                    "page_number": 1,
+                    "chunk_type": "table",
+                },
+            }
+        ]
+    else:
+        chunks = process_pdf_to_chunks(str(sample_pdf))
+        logger.info(f"Chunker extracted {len(chunks)} chunks locally.")
+
+    assert len(chunks) > 0, "No chunks generated from chunker!"
+
+    # Embed and index test chunks
+    contents = [c["content"] for c in chunks]
+    embeddings = await get_batch_embeddings(contents)
+
+    async with AsyncSessionLocal() as session:
+        await insert_chunks_to_pgvector(session, chunks, embeddings)
+        logger.info(f"Indexed {len(chunks)} chunks into pgvector.")
+
+        # Test retriever cosine search
+        query = "What was the Q3 net sales or revenue?"
+        results = await retrieve_similar_chunks(session, query, top_k=3)
+        assert len(results) > 0, "Retriever returned no context results!"
+        logger.info(
+            f"Retriever found top match (Score: {results[0].get('score', 'N/A')}):"
+        )
+        logger.info(f"Content snippet: {results[0]['content'][:100]}...")
+        logger.info("✓ Ingestion & Similarity Retrieval verified.")
+
+
+async def test_llm_streaming():
+    logger.info("--- Testing Gemini 3.6 Flash Streaming Agent ---")
+    prompt = "Summarize the key differences between a 10-K and 10-Q filing in two concise bullet points."
+
+    logger.info("Streaming response from model...")
+    tokens = []
+    async for chunk in generate_streaming_response(prompt=prompt):
+        tokens.append(chunk)
+        print(chunk, end="", flush=True)
+
+    print("\n")
+    full_text = "".join(tokens)
+    assert len(full_text) > 0, "LLM streaming generated empty response!"
+    logger.info("✓ Streaming response verified successfully.")
 
 
 async def main():
-    init_logging()
-    logger.info("Starting End-to-End System Verification...")
+    logger.info("Starting End-to-End Pipeline Integration Test...")
+
+    if not os.getenv("GEMINI_API_KEY"):
+        logger.error("GEMINI_API_KEY environment variable is not set!")
+        sys.exit(1)
 
     try:
         await test_database_connection()
-        embedding = await test_embedding_generation()
-        await test_pgvector_indexing(embedding)
-        await test_retrieval()
-        await test_agent_chat_stream()
-        
-        logger.info("🎉 ALL SYSTEM TESTS PASSED SUCCESSFULLY!")
-
+        await test_redis_connection()
+        await test_embeddings()
+        await test_ingestion_and_retrieval()
+        await test_llm_streaming()
+        logger.info("\n🎉 ALL PIPELINE INTEGRATION TESTS PASSED SUCCESSFULLY! 🎉")
     except Exception as exc:
-        logger.critical("❌ Pipeline verification failed: %s", exc, exc_info=True)
+        logger.error(f"\n❌ Pipeline test failed with error: {exc}", exc_info=True)
         sys.exit(1)
-    finally:
-        await async_engine.dispose()
 
 
 if __name__ == "__main__":

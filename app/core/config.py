@@ -21,7 +21,7 @@ class AppSettings(BaseModel):
 
 class DatabaseSettings(BaseModel):
     url: str = Field(
-        default="postgresql+asyncpg://postgres:postgres@localhost:5432/dev_docs_db"
+        default="postgresql+asyncpg://postgres:postgres@localhost:5431/dev_docs_db"
     )
 
 
@@ -40,7 +40,7 @@ class RAGSettings(BaseModel):
 
 class Settings(BaseModel):
     app: AppSettings = Field(default_factory=AppSettings)
-    db: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     gemini: GeminiSettings = Field(default_factory=GeminiSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
     logging: Dict[str, Any] = Field(default_factory=dict)

@@ -1,36 +1,47 @@
-from typing import AsyncGenerator
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+# app/db/session.py
+import logging
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from app.core.config import config
 
-# Initialize the async engine with pooling parameters
-async_engine = create_async_engine(
-    config.db.url,  # e.g., "postgresql+asyncpg://user:pass@localhost:5432/dbname"
-    echo=config.app.debug,
-    pool_pre_ping=True,  # Test connections before returning them from the pool
-    pool_size=10,
-    max_overflow=20,
+logger = logging.getLogger(__name__)
+
+# Create the async engine
+engine = create_async_engine(
+    config.database.url,
+    echo=False,
+    future=True,
+    pool_pre_ping=True,
 )
 
-# Construct session factory bound to the async engine
+# Async session factory
 AsyncSessionLocal = async_sessionmaker(
-    bind=async_engine,
+    bind=engine,
     class_=AsyncSession,
-    expire_on_commit=False,  # Prevents attribute expiration after commit in async context
+    expire_on_commit=False,
+    autocommit=False,
     autoflush=False,
 )
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """Dependency that yields an AsyncSession and ensures proper cleanup."""
+async def get_db():
+    """FastAPI dependency for yielding database sessions."""
     async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        except Exception:
-            await session.rollback()
-            raise
-        finally:
-            await session.close()
+        yield session
+
+
+async def init_db():
+    """
+    Initializes database extensions and creates missing tables dynamically.
+    Imports models locally inside the function to eliminate circular imports.
+    """
+    # Local import inside the function breaks the circular dependency chain
+    from app.db.models import Base
+
+    async with engine.begin() as conn:
+        # Enable vector extension
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+        # Create all tables registered in Base metadata
+        await conn.run_sync(Base.metadata.create_all)
+
+    logger.info("✓ Database initialized and pgvector extension verified.")
