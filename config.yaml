@@ -35,3 +35,9 @@ logging:
   root:
     level: "INFO"
     handlers: ["console"]
+
+redis:
+  host: "localhost"
+  port: 6379
+  password: "redis_password"
+  db: 0

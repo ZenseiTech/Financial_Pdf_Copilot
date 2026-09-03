@@ -19,8 +19,8 @@ from app.rag.embeddings import (
     get_query_embedding,
 )
 from app.rag.indexer import insert_chunks_to_pgvector
-from app.rag.retriever import retrieve_similar_chunks
-from app.agent.loop import generate_streaming_response
+from app.rag.retriever import search_similar_chunks
+from app.agent.loop import generate_agent_response
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -120,7 +120,7 @@ async def test_ingestion_and_retrieval():
 
         # Test retriever cosine search
         query = "What was the Q3 net sales or revenue?"
-        results = await retrieve_similar_chunks(session, query, top_k=3)
+        results = await search_similar_chunks(session, query, top_k=3)
         assert len(results) > 0, "Retriever returned no context results!"
         logger.info(
             f"Retriever found top match (Score: {results[0].get('score', 'N/A')}):"
@@ -135,9 +135,12 @@ async def test_llm_streaming():
 
     logger.info("Streaming response from model...")
     tokens = []
-    async for chunk in generate_streaming_response(prompt=prompt):
-        tokens.append(chunk)
-        print(chunk, end="", flush=True)
+
+    # Pass db session and prompt explicitly using keyword arguments
+    async with AsyncSessionLocal() as session:
+        async for chunk in generate_agent_response(db=session, user_query=prompt):
+            tokens.append(chunk)
+            print(chunk, end="", flush=True)
 
     print("\n")
     full_text = "".join(tokens)

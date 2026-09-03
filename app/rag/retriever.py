@@ -54,20 +54,19 @@ async def search_similar_chunks(
     # 2. Compute Cosine Distance (1 - cosine_similarity)
     # pgvector provides cosine_distance via .cosine_distance()
     cosine_distance = DocumentChunkModel.embedding.cosine_distance(query_vector)
-    
+
     # Cosine Similarity = 1 - Cosine Distance
     similarity_score = (1 - cosine_distance).label("similarity_score")
 
     # 3. Construct SQLAlchemy Query
-    stmt = (
-        select(DocumentChunkModel, similarity_score)
-        .where(DocumentChunkModel.embedding.isnot(None))
+    stmt = select(DocumentChunkModel, similarity_score).where(
+        DocumentChunkModel.embedding.isnot(None)
     )
 
     # Apply optional metadata/scope filters
     if filename_filter:
         stmt = stmt.where(DocumentChunkModel.filename == filename_filter)
-    
+
     if chunk_type_filter:
         stmt = stmt.where(DocumentChunkModel.chunk_type == chunk_type_filter)
 
@@ -82,27 +81,38 @@ async def search_similar_chunks(
     retrieved_chunks: List[Dict[str, Any]] = []
 
     for chunk_model, score in rows:
+        # Safely extract metadata dict (handling attribute naming differences)
+        meta = (
+            getattr(chunk_model, "metadata_", None)
+            or getattr(chunk_model, "metadata", {})
+            or {}
+        )
+
         score_float = float(score) if score is not None else 0.0
 
         # Filter out results below configured similarity threshold
         if score_float < effective_threshold:
             logger.debug(
                 "Skipping chunk %s (score %.3f below threshold %.3f)",
-                chunk_model.chunk_id,
+                chunk_model.id,
                 score_float,
                 effective_threshold,
             )
             continue
 
-        retrieved_chunks.append({
-            "chunk_id": chunk_model.chunk_id,
-            "filename": chunk_model.filename,
-            "chunk_type": chunk_model.chunk_type,
-            "chunk_index": chunk_model.chunk_index,
-            "content": chunk_model.content,
-            "metadata": chunk_model.metadata_,
-            "similarity_score": round(score_float, 4),
-        })
+        retrieved_chunks.append(
+            {
+                "chunk_id": chunk_model.id,
+                "content": chunk_model.content,
+                "filename": meta.get("file_name") or meta.get("filename", "unknown"),
+                "page_number": meta.get("page_number", 0),
+                "chunk_type": meta.get(
+                    "chunk_type", "text"
+                ),  # Safely extracted from JSONB
+                "metadata": meta,
+                "score": float(score),
+            }
+        )
 
     logger.info(
         "Retrieved %d relevant chunks for query (top_k=%d, threshold=%.2f)",

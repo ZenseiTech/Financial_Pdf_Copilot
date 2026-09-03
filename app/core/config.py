@@ -1,7 +1,7 @@
 import logging.config
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -25,6 +25,13 @@ class DatabaseSettings(BaseModel):
     )
 
 
+class RedisConfig(BaseModel):
+    host: str = "localhost"
+    port: int = 6379
+    password: Optional[str] = ""
+    db: int = 0
+
+
 class GeminiSettings(BaseModel):
     model: str = "gemini-2.5-flash"
     embedding_model: str = "text-embedding-004"
@@ -44,6 +51,7 @@ class Settings(BaseModel):
     gemini: GeminiSettings = Field(default_factory=GeminiSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
     logging: Dict[str, Any] = Field(default_factory=dict)
+    redis: RedisConfig = Field(default_factory=RedisConfig)
 
 
 def load_settings() -> Settings:
